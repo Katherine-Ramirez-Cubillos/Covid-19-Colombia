@@ -1,0 +1,451 @@
+---
+title: COVID-19 in Colombia
+author: Katherine Ramírez Cubillos
+date: '2020-07-30'
+slug: covid-19-in-Colombia
+---
+
+```{r, message = FALSE}
+
+```
+# Introducción
+Desarrollé este modelo para analizar el comportamiento del Covid-19 en Colombia, la base de datos que utilicé se enceuntra en el repositorio de GitHuab de RamiKrispin [https://github.com/RamiKrispin/coronavirus/blob/master/data/coronavirus.rda]. 
+El código que escribí es una reinterpretación de los siguientes modelos: 
+1. COVID-19 in Belgium prouesto por Antoine Soetewey
+2. Analysing COVID-19 (2019-nCoV) outbreak data with R - part 1 propuesto por Tim Churches
+
+#Librerías requeridas por el modelo
+```{r  message = FALSE}
+library(tidyverse)
+library(magrittr) 
+library(lubridate)
+library(tibble)
+library(ggplot2)
+library(ggthemes)
+library(hrbrthemes)
+library(rvest)
+library(gt)
+library(deSolve)
+library(EpiEstim)
+library(incidence)
+library(distcrete)
+library(epitrix)
+library(projections)
+library(here)
+library(janitor)
+library(socviz)
+library(ggrepel)
+library(paletteer)
+library(pander)
+library(magrittr)
+library(dplyr) 
+```
+
+# Cargar la base de datos para Colombia
+Los datos para Colombia se extraen de [`{coronavirus}` R package](/blog/top-r-resources-on-covid-19-coronavirus/#coronavirus) desarrollado por Rami Krispin.
+
+```{r, message = FALSE}
+#devtools::install_github("RamiKrispin/coronavirus")
+#library(coronavirus)
+#data(coronavirus)
+
+#`%>%` <- magrittr::`%>%`
+
+load("C:/Users/Acer/Desktop/Modelo Colombia/coronavirus.rda") #especificar el directorio. 
+
+# Extraer la incidencia acumulada de Colombia
+df <- coronavirus %>%
+  dplyr::filter(country == "Colombia") %>%
+  dplyr::group_by(date, type) %>%
+  dplyr::summarise(total = sum(cases, na.rm = TRUE)) %>%
+  tidyr::pivot_wider(
+    names_from = type,
+    values_from = total
+  ) %>%
+  dplyr::arrange(date) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(active = confirmed - death - recovered) %>%
+  dplyr::mutate(
+    confirmed_cum = cumsum(confirmed),
+    death_cum = cumsum(death),
+    recovered_cum = cumsum(recovered),
+    active_cum = cumsum(active)
+  )
+```
+#Análisis exploratorio de la base de datos
+### Daily cumulative incidence
+Primero se observa la incidencia diaria acumulada de casos de infectados.
+
+
+```{r, cumulative_incidence, message=FALSE, warning=FALSE, tidy=TRUE, fig.width=10, fig.height=6}
+daily_incidence<-df[-(1:44), -c(3,4,5,6,7,8,9)] 
+cumulative_incidence<-df[-(1:44), -c(3,4,5,7,8,9)] 
+
+cumulative_incidence %>%
+  ggplot(aes(x=date, y=confirmed_cum)) + geom_point() + geom_line() +
+  scale_x_date(date_breaks="15 days", date_labels = "%d %b") +
+  labs(x= "Fecha", y="Incidencia diaria acumulada",
+       title="Casos confirmados de COVID-19 en Colombia, 2020",
+       caption="Nota: escalas variables del eje y") +
+  theme(legend.position = "none", 
+        strip.text.y = element_text(size=11))
+```
+
+Los aumentos iniciales para Colombia parecen ser aproximadamente exponenciales, como se espera para la propagación de la epidemia. Al trazar en un eje logarítmico _y_, se esperaría ver un aumento lineal en una escala logarítmica si la curva epidémica es exponencial.
+
+```{r log_cumulative_incidence, message=FALSE, warning=FALSE, tidy=TRUE, fig.width=10, fig.height=6}
+cumulative_incidence %>%
+  ggplot(aes(x=date, y=confirmed_cum)) + geom_point() + geom_line() +
+  scale_y_log10() +
+  scale_x_date(date_breaks="15 days", date_labels = "%d %b") +
+  labs(x="Fecha", y="Incidencia diaria acumulada (escala log)",
+       title="Casos confirmados de COVID-19 en Colombia, 2020",
+       caption="Nota: escalas variables del eje y") +
+  theme(legend.position = "none", 
+        strip.text.y = element_text(size=11))
+
+
+```
+
+
+
+### Incidencia incremental diaria
+
+Se grafica también la incidencia incremental diaria. Esto es más informativo y se conoce en el lenguaje epidemiológico  como la _curva_epidémica_. Se visualiza tradicionalmente como un gráfico de barras, que enfatiza los datos faltantes más que un gráfico de líneas
+
+
+```{r daily_incidence, message=FALSE, warning=FALSE, tidy=TRUE, fig.width=10, fig.height=5}
+
+daily_incidence %>%
+  ggplot(aes(x=date, y=confirmed))  + # geom_point() + geom_line() +
+  geom_bar(stat="identity") + 
+  scale_x_date(date_breaks="15 days", date_labels = "%d %b") +
+  labs(x="Fecha", y="Incidencia diaria acumulada",
+       title="Casos confirmados de COVID-19 en Colombia",
+       caption="Nota: escalas variables del eje y")  +
+  theme(legend.position = "none", 
+        strip.text.y = element_text(size=11)) 
+
+```
+
+### Muertes diarias acumulativas e incrementales en casos confirmados
+
+Ahora se graafica el número diario (incremental) de muertes en casos confirmados para Colombia.
+
+```{r, cumulative_deaths, message=FALSE, warning=FALSE, tidy=TRUE, fig.width=10, fig.height=6}
+
+daily_deaths<-df[-(1:44), -c(2,4,5,6,7,8,9)] 
+cumulative_deaths<-df[-(1:44), -c(2,4,5,6,8,9)] 
+
+cumulative_deaths %>%
+  ggplot(aes(x=date, y=death_cum)) + geom_point() + geom_line() +
+  scale_x_date(date_breaks="15 days", date_labels = "%d %b") +
+  labs(x="Fecha", y="Muertes diarias acumuladas",
+       title="Muertes confirmadas de COVID-19 en Colombia, 2020",
+       caption="Nota: escalas variables del eje y") +
+  theme(legend.position = "none", 
+        strip.text.y = element_text(size=11))
+
+```
+
+En escala logarítmica: 
+```{r log_cumulative_incidence , message=FALSE, warning=FALSE, tidy=TRUE, fig.width=10, fig.height=6}
+
+cumulative_deaths %>%
+  ggplot(aes(x=date, y=death_cum)) + geom_point() + geom_line() +
+  scale_y_log10() +
+  scale_x_date(date_breaks="15 days", date_labels = "%d %b") +
+  labs(x="Fecha", y="Muertes diarias acumulada (escala log)",
+       title="Muertes confirmadas de COVID-19 en Colombia, 2020",
+       caption="Nota: escalas variables del eje y") +
+  theme(legend.position = "none", 
+        strip.text.y = element_text(size=11))
+
+```
+
+Incidencia diaria de muertes:
+```{r daily_case_deaths_plot, message=FALSE, warning=FALSE, tidy=TRUE,fig.width=10, fig.height=6}
+daily_deaths %>%
+  ggplot(aes(x=date, y=death))  + # geom_point() + geom_line() +
+  geom_bar(stat="identity") + 
+  scale_x_date(date_breaks="15 days", date_labels = "%d %b") +
+  labs(x="Fecha", y="Muertes diarias incrementales",
+       title="Muertes diarias de COVID-19 en Colombia",
+       caption="Nota: escalas variables del eje y")  +
+  theme(legend.position = "none", 
+        strip.text.y = element_text(size=11)) 
+```
+
+Claramente, los recuentos diarios de contagios y muertes están aumentando. Se tiene que tener presente que los casos tardan un tiempo en recuperarse o morir, y, por lo tanto, la tendencia de las muertes necesariamente va está rezagada de cualquier tendencia en la incidencia diaria.
+
+
+# Análisis del Covid-19 en Colombia
+
+## Modelo clásico epidemiológico: Modelo *SIR* 
+Tim Churches proporciona una explicación detallada del ***Modelo* SIR** junto con su ajuste en el programa R. Por tal motivo, en este trabajo reproduciré su propuesta con los cambios necesarios para ajustar el modelo a Colombia. 
+
+La siguiente explicación fue realizada por Antoine Soetewey.  
+
+La idea del modelo *SIR* (**S**usceptible - **I**nfectious - **R**ecovered) de botes de enfermedades transmitibles, es que existen tres grupos de personas: 
+* Aquellos que están sanos pero son suceptibles de enfermarse: *S*
+* Las personas que están infecatdas: *I*
+* Las personas que se han recuperado: *R*
+
+Para modelar la dinámica del brote se necesitan tres ecuaciones diferenciales con el ánimo de establecer la tasa de cambio en cada grupo, parametrizado por:
+
+* $\beta$ que controla la transmisión entre *S* y *I*
+* $\gamma$ que controla a transmisión entre *I* y *R*
+
+Formalmente, está por :
+
+$$\frac{dS}{dt} = - \frac{\beta IS}{N}$$
+
+$$\frac{dI}{dt} = \frac{\beta IS}{N} - \gamma I$$
+
+$$\frac{dR}{dt} = \gamma I$$
+Antes de ajustar el modelo a los datos, el primer paso es expresar las ecuaciones diferenciales a una función de R, respecto al tiempo *t*: 
+
+```{r}
+SIR <- function(time, state, parameters) {
+  par <- as.list(c(state, parameters))
+  with(par, {
+    dS <- -beta * I * S / N
+    dI <- beta * I * S / N - gamma * I
+    dR <- gamma * I
+    list(c(dS, dI, dR))
+  })
+}
+```
+
+## Ajustar el modelo *SIR* a los datos de Colombia
+Para ajustar el modelo a los satos se necesitan dos cosas:
+1. Una solución para las ecuaciones diferenciales
+2. Un optimizador para encontrar los valore óptimos para los dos parámetros desconocidos, $\beta$ y $\gamma$
+
+La función `ode()` para ecuaciones diferenciales ordinarias del paquetere de R `{deSolve}` resuelve el sistema de ecuaciones de manera fácil. Para encoentrar los valores óptimos de los parámetros que se desean estimar, se usa la función `optim()` la cual está integrada en la base de R.     
+
+Específicamente, lo que se busca es minimizar la suma de a diferencia de cuadrados entre $I(t)$, el cual es el número de personas en el componente infeccioso $I$ en el tiempo $t$, y el número correspondiente de casos según lo predicho por el modelo $\hat{I}(t)$. Esta cantidad se conoce coom la suma de residuos al cuadrado (*RSS*):
+
+$$RSS(\beta, \gamma) = \sum_t \big(I(t) - \hat{I}(t) \big)^2$$
+
+Para ajustar el modeo a los datos de incidencia de Colombia, se necesita el valor *N* para la población inicial no infectada. Según el Departamento Nacional de Estadística (DANE), la poblacón de Colombia es 48,258,494. De manera que, se usará *N = 48258494* como la población inicial no infectada.   
+
+Luego, se necesita crear un vector con la incidencia diaria acumulada para Colombia, desde Marzo 6 (cuando la incidencia diaria comienza), hasta el 29 de Julio (último dato disponible al tiempo de escribir este artículo). Se empezará comparando la predicciónde incidencia del modelo *SIR*  ajustado a esos datos con la incidencia real desde Marzo 6. También se necesitan los valores iniciales para *N*, *S*, *I* and *R*. La incidencia diaria acumulada para Colombia se extrae de [`{coronavirus}` R package](/blog/top-r-resources-on-covid-19-coronavirus/#coronavirus) desarrollado por Rami Krispin.
+
+```{r, incidence_vector, tidy=TRUE, echo=TRUE}
+# Se pone la incidencia diaria acumulada de Colombia en un vector desde;   
+# Marzo 6 hasta Abril 6 en un vector llamado Infected
+
+N = 48258494
+sir_start_date <- "2020-03-06"
+
+Infected <- cumulative_incidence %>%
+  filter(date >= ymd("2020-03-06"),
+         date <= ymd("2020-07-29")) %>%
+  pull(confirmed_cum)
+
+#Se crea un vector de día incremental con la misma longitud del vector de casos.  
+Day <- 1:(length(Infected))
+
+# Se especifican los valores incicales para S, I and R
+init <- c(S = N-Infected[1], I = Infected[1], R = 0)
+```
+
+Se necesita definir una función para calcular el $RSS$, dadaa por el conjunto de valores  para $\beta$ and $\gamma$.
+
+```{r define_RSS_function, tidy=TRUE, echo=TRUE}
+#Se define una función para calcualr la suma de residuos al cuadrado
+#pasando los parámetros beta y gamma que deben optimizarse para
+# ajustar mejor a los datos de incidencia
+
+RSS <- function(parameters) {
+  names(parameters) <- c("beta", "gamma")
+  out <- ode(y = init, times = Day, func = SIR, parms = parameters)
+  fit <- out[ , 3]
+  sum((Infected - fit)^2)
+}
+
+```
+Finalmente, se ajusta el modelo *SIR* a los  datos al encontrar los valores para $ \ beta $ y $ \ gamma $ que minimizan la suma residual de cuadrados entre la incidencia acumulada observada y la incidencia acumulada predicha. Se debe verificar que el modelo haya convergido, como lo indica el mensaje que se muestra a continuación:
+```{r fit_SIR_model, tidy=TRUE, echo=TRUE}
+#Se encuentan los valores de beta y gamma que dan el menor RSS, 
+#los cuales reresentan el mejor ajuste a los datos. 
+
+# now find the values of beta and gamma that give the smallest RSS,
+# which represents the best fit to the data. Se empieza con el valor 0.5 para cada uno
+#se restringen al intervalo 0 to 1.0
+
+library(deSolve)
+Opt <- optim(c(0.5, 0.5), RSS, 
+             method = "L-BFGS-B", 
+             lower = c(0, 0), upper = c(1, 1)) 
+
+# check for convergence
+Opt$message
+
+```
+La convergencia se confirma. Ahora se examinan los valores ajustados para $ \ beta $ y $ \ gamma $
+```{r SIR_model_fit_examine, echo=TRUE}
+Opt_par <- setNames(Opt$par, c("beta", "gamma"))
+Opt_par
+```
+Esos valores no significan mucho, por sí mismos, pero se usan para obtener los números ajustados de personas en cada compartimento del *modelo SIR* para las fechas hasta el 29 de Julio que se usaron para ajustar el modelo, y comparar esos valores ajustados con los datos observados
+```{r SIR_model_plot_fitted_data, echo=TRUE, tidy=TRUE, message=FALSE}
+
+t <- 1:as.integer(today() - ymd(sir_start_date)) 
+# get the fitted values from our SIR model
+fitted_cumulative_incidence <- data.frame(ode(y = init, times = t, 
+                                              func = SIR, parms = Opt_par))
+
+# add a Date column and join the observed incidence data (Si no funciona probar desde la línea 306 a la 313)
+fitted_cumulative_incidence <- fitted_cumulative_incidence %>%
+  mutate(date=ymd(sir_start_date) + days(t-1),) %>%
+  left_join(cumulative_incidence %>% 
+              ungroup() %>%
+              select(date, confirmed_cum))
+
+#añadir columna t a cumulaetive_incidence
+#cumulative_incidence<-cbind(cumulative_incidence, t)
+# add a Date column and join the observed incidence data
+#fitted_cumulative_incidence <- merge(fitted_cumulative_incidence, 
+                                     #cumulative_incidence, by.x ="time", by.y = "t")
+
+
+
+# plot the data
+fitted_cumulative_incidence %>%
+  filter(date <= ymd("2020-07-29")) %>%
+  ggplot(aes(x=date)) + geom_line(aes(y=I), colour="red") +
+  geom_point(aes(y=confirmed_cum), colour="orange") +
+  labs(x="Fecha", y="Incidencia acumulada", 
+       title="Incidencia acumulada ajustada vs observada de COVID-19, Colombia",
+       subtitle="(Rojo=Incidencia ajustada del modelo SIR, Naranaja=Incidencia observada)")
+
+
+
+
+```
+
+En escala logarítmica el gráfico sería el siguiente: 
+
+
+```{r}
+fitted_cumulative_incidence %>%
+  filter(date <= ymd("2020-07-29")) %>%
+  ggplot(aes(x=date)) + geom_line(aes(y=I), colour="red") +
+  geom_point(aes(y=confirmed_cum), colour="orange") +
+  labs(x="Fecha",y="Incidencia acumulada", 
+       title="Incidencia acumulada ajustada vs observada de COVID-19, Colombia",
+       subtitle="(Rojo=Incidencia ajustada del modelo SIR, Naranaja=Incidencia observada)")+
+  theme_minimal() +
+  scale_y_log10(labels = scales::comma)
+  
+```
+
+
+Parece un ajuste bueno a los datos de incidencia acumulada observados, por lo que ahora se puede usar el modelo ajustado para calcular el _ número de reproducción básico_ $ R_ {0} $ que da el número promedio de personas susceptibles que están infectadas por cada persona infecciosa:
+$$R_{0} = \frac{\beta}{\gamma}$$
+Es fácil de calcular:
+```{r SIR_model_R0, echo=FALSE, tidy=TRUE}
+R0 <- setNames(Opt_par["beta"] / Opt_par["gamma"], "R0")
+R0
+```
+De momento, la OMS estima que la tasa de contagio del virus es de 1.4 a 2.5, así que por ahora la estimación cae dentro del rango esperado. 
+
+## Usar el modelo SIR para Colombia para hacer predicciones
+El siguiente paso es utilizar el *modelo SIR* ajustado para hacer predicciones sobre el curso futuro del brote. Sin embargo, se requiere precaución, porque el modelo SIR asume un _número de reproducción_ fijo, pero si se han implementado intervenciones de salud pública, como la cuarentena de casos, el rastreo de contactos y el aislamiento de esos contactos, y restricciones generales sobre la mezcla social, entonces el _número de reproducción efectivo_ $ R_ {e} $ será dinámico y debería caer a medida que esas intervenciones se implementen progresivamente, a valores considerablemente menores que el _número de reproducción básico_ $ R_ {0} $, que refleja el comportamiento del virus al comienzo de una epidemia antes de implementar cualquier respuesta.
+
+Entonces se usa el *modelo SIR*, ajustado a los primeros 15 días de datos, para extrapolar a la fecha actual, y comparar eso con los valores observados:
+```{r SIR_model_plot_extrapolated, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
+
+fitted_cumulative_incidence %>%
+  ggplot(aes(x=date)) + geom_line(aes(y=I), colour="red") +
+  geom_point(aes(y=confirmed_cum), colour="orange") +
+    scale_y_continuous(labels = scales::comma) +
+  labs(y="Cumulative incidence", 
+       title="COVID-19 fitted vs observed cumulative incidence, Colombia",
+       subtitle="(red=fitted incidence from SIR model, orange=observed incidence)")
+```
+## Using our model to analyze the outbreak if there was no intervention
+
+
+```{r SIR_model_plot_no_intervention, echo=TRUE, tidy=TRUE, message=FALSE, warning=FALSE}
+# time in days for predictions
+t <- 1:300
+# get the fitted values from our SIR model
+fitted_cumulative_incidence <- data.frame(ode(y = init, times = t, 
+                                              func = SIR, parms = Opt_par))
+
+# add a Date column and join the observed incidence data
+fitted_cumulative_incidence <- fitted_cumulative_incidence %>%
+  mutate(date=ymd(sir_start_date) + days(t-1),) %>%
+  left_join(cumulative_incidence %>% 
+              ungroup() %>%
+              select(date, confirmed_cum))
+
+# plot the data
+fitted_cumulative_incidence %>%
+    ggplot(aes(x=date)) + geom_line(aes(y=I), colour="red") +
+              geom_line(aes(y=S), colour="black") +
+              geom_line(aes(y=R), colour="green") +
+              geom_point(aes(y=confirmed_cum), colour="orange") +
+              scale_y_continuous(labels = scales::comma) +
+              labs(x="Fecha", y="Personas", 
+                   title="Incidencia acumulada ajustada vs observada de COVID-19, Colombia")+
+              scale_colour_manual(name = '', 
+         values =c('red'='red', 'black'='black', 'green'='green', 'orange'='orange'), 
+         labels = c('Susceptible', 'Recovered', 'Observed incidence', 'Infectious'))
+
+```
+
+It is easier to see what is going on if we use a log scale:
+```{r SIR_model_plot_no_intervention_log, echo=FALSE, tidy=TRUE, message=FALSE, warning=FALSE}
+
+fitted_cumulative_incidence %>%
+  ggplot(aes(x=date)) + geom_line(aes(y=I, colour="red")) +
+  geom_line(aes(y=S, colour="black")) +
+  geom_line(aes(y=R, colour="green")) +
+  geom_point(aes(y=confirmed_cum, colour="orange")) +
+  scale_y_log10(labels = scales::comma) +
+  labs(x="Fecha", y="Personas", 
+       title="Incidencia acumulada ajustada vs observada de COVID-19, Colombia") + 
+  scale_colour_manual(name = '', 
+                      values =c('red'='red', 'black'='black', 'green'='green', 'orange'='orange'), 
+                      labels = c('Susceptible', 'Recuperados', 'Incidencia observada', 'Infectados'))
+
+
+
+
+```
+
+
+### Más estadísiticas importanates
+
+Otras estad´siticas interesantes que pueden calcularse al mudeo ajustado son:
+*La fecha del pico de la pandemia
+Ël número de casos severos
+*El número de personas que necesitan cuidados intensivos
+*El número de muertes
+
+```{r fit, echo=TRUE, tidy=TRUE, message=FALSE, warning=FALSE}
+fit <- fitted_cumulative_incidence
+
+# peak of pandemic
+fit[fit$I == max(fit$I), c("date", "I")]
+
+# severe cases
+max_infected <- max(fit$I)
+max_infected / 5
+
+# cases with need for intensive care
+max_infected * 0.06
+
+# deaths with supposed 0.7% fatality rate
+max_infected * 0.007
+```
+
+
+# Conclusión modelo no mitigado
+Claramente, esa predicción, en caso de que se cumpla, sería un desastre no mitigado. En este punto, vale la pena señalar la importancia de una intervención decisiva de salud pública para limitar la propagación de tales epidemias. Sin tales intervenciones, decenas de millones de personas podrían infectarse, como lo predice nuestro modelo, e incluso con una tasa de mortalidad de 0.07 ciento,  miles de personas morirían. 
+
+
